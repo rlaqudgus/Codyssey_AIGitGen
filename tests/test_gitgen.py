@@ -1,0 +1,274 @@
+"""단위/통합 테스트. AI API는 호출하지 않는다 (generate를 가짜로 바꿔 끼운다).
+
+실행: python -m unittest discover -s tests -v
+"""
+import contextlib
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gitgen import cli, validate  # noqa: E402
+from gitgen.ai_client import AIError, AIResult, resolve_provider  # noqa: E402
+from gitgen.git_collect import parse_status  # noqa: E402
+from gitgen.safe_mode import is_sensitive_file, mask_text, prepare_diff, split_diff  # noqa: E402
+
+SAMPLE_DIFF = """diff --git a/app.py b/app.py
+index 1111111..2222222 100644
+--- a/app.py
++++ b/app.py
+@@ -1,3 +1,5 @@
+ import os
++API_KEY = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
++ADMIN = "admin@example.com"
+ print("hi")
+diff --git a/.env b/.env
+index 3333333..4444444 100644
+--- a/.env
++++ b/.env
+@@ -1 +1 @@
+-DB_PASSWORD=oldpassword1
++DB_PASSWORD=newpassword2
+diff --git a/docs/a.md b/docs/a.md
+index 5555555..6666666 100644
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -1 +1,2 @@
+ # title
++more
+"""
+
+
+class StatusTests(unittest.TestCase):
+    def test_parse_status(self):
+        branch, files = parse_status("## feat/x...origin/feat/x [ahead 1]\n M a.py\n?? new.txt\nR  old.py -> new.py\n")
+        self.assertEqual(branch, "feat/x")
+        self.assertEqual(files, [(" M", "a.py"), ("??", "new.txt"), ("R ", "new.py")])
+
+    def test_parse_status_no_commits(self):
+        self.assertEqual(parse_status("## No commits yet on main\n")[0], "main")
+
+
+class SafeModeTests(unittest.TestCase):
+    def test_split(self):
+        self.assertEqual([p for p, _ in split_diff(SAMPLE_DIFF)], ["app.py", ".env", "docs/a.md"])
+
+    def test_masking(self):
+        text, counts = mask_text('token = "abcd1234efgh"\nmail me: kim@test.co.kr\nAWS AKIAIOSFODNN7EXAMPLE\n'
+                                 "+SECRET_KEY=supersecretvalue\ncall 010-1234-5678")
+        for leaked in ("abcd1234efgh", "kim@test.co.kr", "AKIAIOSFODNN7EXAMPLE", "supersecretvalue", "010-1234-5678"):
+            self.assertNotIn(leaked, text)
+        self.assertIn("token", text)
+        self.assertGreaterEqual(sum(counts.values()), 5)
+
+    def test_code_is_not_masked(self):
+        line = 'token = os.environ.get("AI_API_KEY")'
+        self.assertEqual(mask_text(line)[0], line)
+
+    def test_custom_pattern(self):
+        text, counts = mask_text("id: EMP-12345", [r"EMP-\d+"])
+        self.assertEqual(text, "id: [MASKED_CUSTOM]")
+        self.assertEqual(counts, {"custom_1": 1})
+
+    def test_sensitive_files(self):
+        self.assertTrue(is_sensitive_file(".env"))
+        self.assertTrue(is_sensitive_file("config/server.pem"))
+        self.assertFalse(is_sensitive_file(".env.example"))
+        self.assertFalse(is_sensitive_file("app.py"))
+
+    def test_safe_on_vs_off(self):
+        off = prepare_diff(SAMPLE_DIFF, safe=False)
+        on = prepare_diff(SAMPLE_DIFF, safe=True, max_files=10, max_lines=200)
+        self.assertIn("sk-ant-api03", off.text)
+        self.assertNotIn("sk-ant-api03", on.text)
+        self.assertNotIn("admin@example.com", on.text)
+        self.assertNotIn("newpassword2", on.text)
+        self.assertEqual(on.excluded, [".env"])
+        self.assertGreaterEqual(on.masked_total, 2)
+
+    def test_limits(self):
+        out = prepare_diff(SAMPLE_DIFF, safe=True, max_files=2, max_lines=6)
+        self.assertEqual(out.omitted, ["docs/a.md"])
+        self.assertEqual(out.sent_files, 2)
+        self.assertLessEqual(out.sent_lines, 6)
+        self.assertIn("생략", out.text)
+
+
+class ValidateTests(unittest.TestCase):
+    def test_extract_json_with_fence(self):
+        self.assertEqual(validate.extract_json('```json\n{"title": "a"}\n```'), {"title": "a"})
+        self.assertEqual(validate.extract_json('결과입니다: {"title": "a"} 끝'), {"title": "a"})
+        with self.assertRaises(validate.OutputError):
+            validate.extract_json("JSON 없음")
+
+    def test_commit_title_is_truncated(self):
+        data = {"title": "feat: " + "아주 긴 제목 " * 20, "bullets": ["- a.py 수정"]}
+        self.assertTrue(validate.check_commit(data))
+        draft, notes = validate.normalize_commit(data)
+        self.assertLessEqual(len(draft.title), 72)
+        self.assertTrue(notes)
+        self.assertEqual(draft.bullets, ["a.py 수정"])
+        self.assertEqual(validate.verify_commit_text(validate.render_commit(draft)), [])
+
+    def test_commit_title_cleanup(self):
+        draft, _ = validate.normalize_commit({"title": "`fix: 버그 수정.`\n둘째 줄", "bullets": []})
+        self.assertEqual(draft.title, "fix: 버그 수정")
+        self.assertEqual(validate.render_commit(draft), "fix: 버그 수정")
+
+    def test_missing_title_raises(self):
+        with self.assertRaises(validate.OutputError):
+            validate.normalize_commit({"title": "", "bullets": ["x"]})
+
+    def test_pr_sections_are_guaranteed(self):
+        data = {"title": "feat: x", "why": ["이유"], "what": "- 하나\n- 둘", "how_to_test": []}
+        self.assertEqual(len(validate.check_pr(data)), 1)
+        draft, notes = validate.normalize_pr(data, checklist=["테스트 통과"])
+        body = validate.render_pr_body(draft)
+        self.assertEqual(validate.verify_pr_text(draft.title, body), [])
+        for header in ("## Why", "## What", "## How to Test", "## Checklist"):
+            self.assertIn(header, body)
+        self.assertEqual(draft.sections["what"], ["하나", "둘"])
+        self.assertEqual(len(notes), 1)
+
+    def test_pr_title_limit(self):
+        draft, _ = validate.normalize_pr({"title": "t" * 200, "why": ["a"], "what": ["b"], "how_to_test": ["c"]})
+        self.assertLessEqual(len(draft.title), 80)
+
+    def test_verify_detects_missing_section(self):
+        self.assertTrue(validate.verify_pr_text("t", "## Why\n- a\n\n## What\n\n## How to Test\n- c"))
+
+
+class ProviderTests(unittest.TestCase):
+    def test_resolve(self):
+        self.assertEqual(resolve_provider(None, {"AI_API_KEY": "abc"}), ("gemini", "abc"))
+        self.assertEqual(resolve_provider(None, {"AI_API_KEY": "sk-ant-x"}), ("claude", "sk-ant-x"))
+        self.assertEqual(resolve_provider(None, {"ANTHROPIC_API_KEY": "k"}), ("claude", "k"))
+        self.assertEqual(resolve_provider("gemini", {"GEMINI_API_KEY": "g"}), ("gemini", "g"))
+        self.assertEqual(resolve_provider(None, {}), ("gemini", ""))
+        with self.assertRaises(AIError):
+            resolve_provider("gpt", {})
+
+
+def git(*args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                   check=True, capture_output=True)
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        self.old_cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+        git("init", "-q", "-b", "main")
+        with open("app.py", "w", encoding="utf-8") as f:
+            f.write("print('hi')\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        self.env = mock.patch.dict(os.environ, {"AI_API_KEY": "test-key"}, clear=False)
+        self.env.start()
+        for name in ("AI_PROVIDER", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+            os.environ.pop(name, None)
+
+    def tearDown(self):
+        self.env.stop()
+        os.chdir(self.old_cwd)
+        try:
+            self.tmp.cleanup()
+        except OSError:
+            pass
+
+    def run_cli(self, *argv, reply=None, side_effect=None):
+        out = io.StringIO()
+        fake = mock.Mock(side_effect=side_effect) if side_effect else mock.Mock(
+            return_value=AIResult(text=json.dumps(reply or {}, ensure_ascii=False), input_tokens=10, output_tokens=5))
+        with mock.patch.object(cli, "generate", fake), contextlib.redirect_stdout(out):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), fake
+
+    def modify(self):
+        with open("app.py", "a", encoding="utf-8") as f:
+            f.write('KEY = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"\n')
+
+    def test_no_changes(self):
+        code, out, fake = self.run_cli("commit")
+        self.assertEqual(code, 0)
+        self.assertIn("변경 사항이 없습니다", out)
+        fake.assert_not_called()
+
+    def test_commit(self):
+        self.modify()
+        code, out, fake = self.run_cli("commit", reply={
+            "summary": "키 상수 추가", "title": "feat: 키 상수 추가", "bullets": ["app.py에 KEY 상수 추가"]})
+        self.assertEqual(code, 0)
+        self.assertIn("--- Commit Message ---", out)
+        self.assertIn("feat: 키 상수 추가\n\n- app.py에 KEY 상수 추가", out)
+        self.assertIn("AI API 호출 횟수: 1회", out)
+        self.assertEqual(fake.call_count, 1)
+
+    def test_safe_mode_masks_prompt(self):
+        self.modify()
+        reply = {"title": "feat: x", "bullets": ["app.py"]}
+        _, _, plain = self.run_cli("commit", reply=reply)
+        _, out, safe = self.run_cli("commit", "--safe-mode", reply=reply)
+        self.assertIn("sk-ant-api03", plain.call_args[0][4])
+        self.assertNotIn("sk-ant-api03", safe.call_args[0][4])
+        self.assertIn("safe-mode ON", out)
+
+    def test_pr(self):
+        git("checkout", "-q", "-b", "feature/x")
+        self.modify()
+        git("commit", "-q", "-am", "work")
+        code, out, _ = self.run_cli("pr", reply={
+            "summary": "s", "title": "feat: x", "why": ["w"], "what": ["app.py 변경"], "how_to_test": ["python app.py"]})
+        self.assertEqual(code, 0)
+        self.assertIn("현재 브랜치: feature/x", out)
+        for marker in ("--- PR Title ---", "--- PR Body ---", "## Why", "## What", "## How to Test"):
+            self.assertIn(marker, out)
+
+    def test_retry_makes_second_call(self):
+        self.modify()
+        bad = AIResult(text=json.dumps({"title": "x" * 100, "bullets": ["a"]}))
+        good = AIResult(text=json.dumps({"title": "fix: ok", "bullets": ["a"]}))
+        code, out, fake = self.run_cli("commit", "--retry", side_effect=[bad, good])
+        self.assertEqual((code, fake.call_count), (0, 2))
+        self.assertIn("AI API 호출 횟수: 2회", out)
+        self.assertIn("fix: ok", out)
+
+    def test_missing_key(self):
+        self.modify()
+        os.environ.pop("AI_API_KEY")
+        code, out, fake = self.run_cli("commit")
+        self.assertEqual(code, 1)
+        self.assertIn("AI_API_KEY 환경변수가 설정되지 않았습니다", out)
+        fake.assert_not_called()
+
+    def test_api_error(self):
+        self.modify()
+        code, out, _ = self.run_cli("commit", side_effect=AIError("HTTP 401 인증 실패"))
+        self.assertEqual(code, 1)
+        self.assertIn("AI API 호출 실패: HTTP 401 인증 실패", out)
+
+    def test_dry_run(self):
+        self.modify()
+        os.environ.pop("AI_API_KEY")
+        code, out, fake = self.run_cli("commit", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("<git_diff>", out)
+        fake.assert_not_called()
+
+    def test_not_a_repo_root(self):
+        os.mkdir("sub")
+        os.chdir("sub")
+        code, out, _ = self.run_cli("commit")
+        self.assertEqual(code, 1)
+        self.assertIn("프로젝트 루트", out)
+
+
+if __name__ == "__main__":
+    unittest.main()
