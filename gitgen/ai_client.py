@@ -72,6 +72,9 @@ def _post(url, headers, body, timeout):
         except Exception:
             pass
         hint = HTTP_HINT.get(e.code, "서버 오류 (잠시 후 다시 시도하세요)" if e.code >= 500 else "요청 실패")
+        # Gemini는 잘못된 키에 401이 아니라 400을 돌려준다. 원인에 맞는 안내로 바꾼다.
+        if e.code == 400 and "api key" in detail.lower():
+            hint = HTTP_HINT[401]
         raise AIError(f"HTTP {e.code} {hint}" + (f" — {detail}" if detail else ""))
     except (socket.timeout, TimeoutError):
         raise AIError(f"응답 시간 초과 ({timeout}초). 네트워크 상태를 확인하거나 --timeout 을 늘리세요.")

@@ -155,6 +155,26 @@ class ProviderTests(unittest.TestCase):
             resolve_provider("gpt", {})
 
 
+class HttpErrorTests(unittest.TestCase):
+    def call_with_error(self, status, message):
+        import urllib.error
+        from gitgen import ai_client
+        body = io.BytesIO(json.dumps({"error": {"message": message}}).encode("utf-8"))
+        error = urllib.error.HTTPError("https://example.invalid", status, "err", {}, body)
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(AIError) as caught:
+                ai_client.generate("gemini", "gemini-3.6-flash", "bad", "s", "u")
+        return str(caught.exception)
+
+    def test_gemini_invalid_key_is_reported_as_auth_failure(self):
+        message = self.call_with_error(400, "API key not valid. Please pass a valid API key.")
+        self.assertIn("HTTP 400 인증 실패", message)
+        self.assertIn("API key not valid", message)
+
+    def test_other_400_keeps_request_hint(self):
+        self.assertIn("요청 형식 오류", self.call_with_error(400, "Invalid value at 'generation_config'"))
+
+
 def git(*args):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
                    check=True, capture_output=True)
