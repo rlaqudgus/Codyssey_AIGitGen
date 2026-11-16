@@ -1,18 +1,19 @@
 """모델 출력 검증과 후처리.
 
 모델은 JSON 필드만 돌려주고, 이 모듈이
-1) JSON 추출  2) 규칙 위반 점검(check_*)  3) 후처리(normalize_*)  4) 템플릿 조립(render_*)
-5) 최종 텍스트 재검증(verify_*)을 맡는다. 그래서 형식 규칙은 모델의 실수와 무관하게 보장된다.
+1) JSON 추출  2) 길이/형식 후처리(normalize_*)  3) 템플릿 조립(render_*)  4) 최종 텍스트 검증(verify_*)
+을 맡는다. 그래서 형식 규칙은 모델의 실수와 무관하게 지켜진다.
 """
 import json
 import re
 from dataclasses import dataclass, field
 
-from .config import COMMIT_TITLE_MAX, COMMIT_TITLE_RECOMMENDED, PR_TITLE_MAX
-
+COMMIT_TITLE_RECOMMENDED = 50
+COMMIT_TITLE_MAX = 72
+PR_TITLE_MAX = 80
+MAX_BULLETS = 5
 PLACEHOLDER = "(AI가 내용을 생성하지 못했습니다. 직접 작성하세요)"
 PR_SECTIONS = [("why", "Why"), ("what", "What"), ("how_to_test", "How to Test")]
-MAX_BULLETS = 5
 
 
 class OutputError(Exception):
@@ -31,12 +32,10 @@ class PRDraft:
     summary: str
     title: str
     sections: dict = field(default_factory=dict)    # why / what / how_to_test -> [불릿]
-    checklist: list = field(default_factory=list)
 
 
 def extract_json(text):
     """모델 응답에서 JSON 객체 하나를 꺼낸다. 코드 펜스나 앞뒤 설명이 있어도 견딘다."""
-    text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text.strip())
     start = text.find("{")
     if start < 0:
         raise OutputError("모델 응답에서 JSON 객체를 찾지 못했습니다.")
@@ -54,9 +53,8 @@ def _one_line(value):
 
 
 def _clean_title(value):
-    title = _one_line(str(value or "").strip().splitlines()[0] if str(value or "").strip() else "")
-    title = title.strip("`\"' ")
-    return title.rstrip(".。")
+    lines = str(value or "").strip().splitlines()
+    return _one_line(lines[0] if lines else "").strip("`\"' ").rstrip(".。")
 
 
 def _clean_bullets(value):
@@ -64,12 +62,8 @@ def _clean_bullets(value):
         value = value.splitlines()
     if not isinstance(value, list):
         return []
-    bullets = []
-    for item in value:
-        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", _one_line(item))
-        if line:
-            bullets.append(line)
-    return bullets
+    bullets = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", _one_line(item)) for item in value]
+    return [b for b in bullets if b][:MAX_BULLETS]
 
 
 def fit_title(title, max_len):
@@ -83,35 +77,6 @@ def fit_title(title, max_len):
     return cut.rstrip(" ,:;-") + "…"
 
 
-# ---------- 규칙 위반 점검 (재생성 요청용 피드백) ----------
-
-def check_commit(data):
-    issues = []
-    title = _clean_title(data.get("title"))
-    if not title:
-        issues.append("title이 비어 있다. 커밋 제목 1줄은 필수다.")
-    elif len(title) > COMMIT_TITLE_MAX:
-        issues.append(f"title이 {len(title)}자다. {COMMIT_TITLE_MAX}자 이하(권장 {COMMIT_TITLE_RECOMMENDED}자)로 줄여라.")
-    if not _clean_bullets(data.get("bullets")):
-        issues.append("bullets가 비어 있다. 핵심 변경 사항을 1개 이상 써라.")
-    return issues
-
-
-def check_pr(data):
-    issues = []
-    title = _clean_title(data.get("title"))
-    if not title:
-        issues.append("title이 비어 있다. PR 제목 1줄은 필수다.")
-    elif len(title) > PR_TITLE_MAX:
-        issues.append(f"title이 {len(title)}자다. {PR_TITLE_MAX}자 이하로 줄여라.")
-    for key, header in PR_SECTIONS:
-        if not _clean_bullets(data.get(key)):
-            issues.append(f"{key}({header}) 항목이 비어 있다. 1개 이상 써라.")
-    return issues
-
-
-# ---------- 후처리 ----------
-
 def normalize_commit(data):
     """(CommitDraft, 후처리 내역)을 돌려준다. 제목이 아예 없으면 OutputError."""
     notes = []
@@ -122,15 +87,11 @@ def normalize_commit(data):
         notes.append(f"커밋 제목 {len(title)}자 → 최대 {COMMIT_TITLE_MAX}자로 잘랐습니다.")
         title = fit_title(title, COMMIT_TITLE_MAX)
     elif len(title) > COMMIT_TITLE_RECOMMENDED:
-        notes.append(f"커밋 제목이 {len(title)}자입니다 (권장 {COMMIT_TITLE_RECOMMENDED}자 이내, 최대 {COMMIT_TITLE_MAX}자).")
-    bullets = _clean_bullets(data.get("bullets"))
-    if len(bullets) > MAX_BULLETS:
-        notes.append(f"본문 불릿 {len(bullets)}개 → {MAX_BULLETS}개로 줄였습니다.")
-        bullets = bullets[:MAX_BULLETS]
-    return CommitDraft(summary=_one_line(data.get("summary")), title=title, bullets=bullets), notes
+        notes.append(f"커밋 제목이 {len(title)}자입니다 (권장 {COMMIT_TITLE_RECOMMENDED}자 이내).")
+    return CommitDraft(_one_line(data.get("summary")), title, _clean_bullets(data.get("bullets"))), notes
 
 
-def normalize_pr(data, checklist=()):
+def normalize_pr(data):
     notes = []
     title = _clean_title(data.get("title"))
     if not title:
@@ -140,17 +101,12 @@ def normalize_pr(data, checklist=()):
         title = fit_title(title, PR_TITLE_MAX)
     sections = {}
     for key, header in PR_SECTIONS:
-        bullets = _clean_bullets(data.get(key))
-        if not bullets:
+        sections[key] = _clean_bullets(data.get(key))
+        if not sections[key]:
             notes.append(f"{header} 섹션이 비어 있어 안내 문구를 넣었습니다. 직접 채워 주세요.")
-            bullets = [PLACEHOLDER]
-        sections[key] = bullets[:MAX_BULLETS]
-    draft = PRDraft(summary=_one_line(data.get("summary")), title=title,
-                    sections=sections, checklist=list(checklist))
-    return draft, notes
+            sections[key] = [PLACEHOLDER]
+    return PRDraft(_one_line(data.get("summary")), title, sections), notes
 
-
-# ---------- 템플릿 조립 ----------
 
 def render_commit(draft):
     if not draft.bullets:
@@ -159,17 +115,13 @@ def render_commit(draft):
 
 
 def render_pr_body(draft):
-    blocks = []
-    for key, header in PR_SECTIONS:
-        blocks.append(f"## {header}\n" + "\n".join(f"- {b}" for b in draft.sections[key]))
-    if draft.checklist:
-        blocks.append("## Checklist\n" + "\n".join(f"- [ ] {item}" for item in draft.checklist))
-    return "\n\n".join(blocks)
+    return "\n\n".join(
+        f"## {header}\n" + "\n".join(f"- {b}" for b in draft.sections[key]) for key, header in PR_SECTIONS
+    )
 
-
-# ---------- 최종 텍스트 재검증 ----------
 
 def verify_commit_text(text):
+    """조립이 끝난 커밋 메시지가 규칙을 지키는지 다시 확인한다. 문제 목록을 돌려준다."""
     problems = []
     lines = text.splitlines()
     if not lines or not lines[0].strip():
