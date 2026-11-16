@@ -41,7 +41,7 @@ class Prepared:
     sent_lines: int = 0
     masked: int = 0                                 # 마스킹한 횟수
     excluded: list = field(default_factory=list)    # 민감 파일이라 내용 제외
-    omitted: list = field(default_factory=list)     # 파일 수 제한으로 제외
+    omitted: list = field(default_factory=list)     # 파일/줄 수 제한으로 제외
 
 
 def split_diff(diff):
@@ -72,20 +72,6 @@ def mask_text(text):
     return text, total
 
 
-def _allocate(lengths, budget):
-    """줄 수 예산을 파일들에 고르게 나눈다. 짧은 파일이 남긴 몫은 긴 파일에 다시 나눈다."""
-    if not lengths:
-        return []
-    share = max(1, budget // len(lengths))
-    alloc = [min(n, share) for n in lengths]
-    left = budget - sum(alloc)
-    for i, n in enumerate(lengths):
-        extra = max(0, min(n - alloc[i], left))
-        alloc[i] += extra
-        left -= extra
-    return alloc
-
-
 def prepare_diff(diff, safe=False):
     """AI에 보낼 diff를 만든다.
 
@@ -106,11 +92,16 @@ def prepare_diff(diff, safe=False):
                 blocks[i] = (path, [lines[0], "[safe-mode] 민감 파일로 분류되어 내용을 전송하지 않습니다."])
 
     parts = []
-    for (_, lines), keep in zip(blocks, _allocate([len(b) for _, b in blocks], max_lines)):
-        kept = lines[:keep]
+    remaining = max_lines
+    for path, lines in blocks:
+        if remaining <= 0:                  # 줄 수 예산을 다 썼으면 파일 이름만 알린다
+            out.omitted.append(path)
+            continue
+        kept = lines[:remaining]
+        remaining -= len(kept)
         out.sent_lines += len(kept)
-        if len(lines) > keep:
-            kept.append(f"... (이 파일의 나머지 {len(lines) - keep}줄 생략)")
+        if len(lines) > len(kept):
+            kept.append(f"... (이 파일의 나머지 {len(lines) - len(kept)}줄 생략)")
         parts.append("\n".join(kept))
     out.sent_files = len(parts)
     if out.omitted:

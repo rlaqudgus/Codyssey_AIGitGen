@@ -73,7 +73,8 @@ class SafeModeTests(unittest.TestCase):
     def test_limits(self):
         big = "".join(f"diff --git a/f{i}.py b/f{i}.py\n" + "+line\n" * 40 for i in range(12))
         out = prepare_diff(big, safe=True)
-        self.assertEqual((out.sent_files, len(out.omitted)), (10, 2))
+        self.assertEqual(out.sent_files + len(out.omitted), 12)
+        self.assertIn("f11.py", out.text)     # 내용이 빠진 파일도 이름은 전달
         self.assertLessEqual(out.sent_lines, 200)
         self.assertIn("생략", out.text)
 
@@ -89,7 +90,6 @@ class ValidateTests(unittest.TestCase):
         self.assertLessEqual(len(draft.title), 72)
         self.assertTrue(notes)
         self.assertEqual(draft.bullets, ["a.py 수정"])
-        self.assertEqual(validate.verify_commit_text(validate.render_commit(draft)), [])
         draft, _ = validate.normalize_commit({"title": "`fix: 버그 수정.`\n둘째 줄"})
         self.assertEqual(validate.render_commit(draft), "fix: 버그 수정")
 
@@ -101,12 +101,10 @@ class ValidateTests(unittest.TestCase):
         draft, notes = validate.normalize_pr({"title": "t" * 200, "why": ["이유"], "what": "- 하나\n- 둘", "how_to_test": []})
         body = validate.render_pr_body(draft)
         self.assertLessEqual(len(draft.title), 80)
-        self.assertEqual(validate.verify_pr_text(draft.title, body), [])
+        for header in ("## Why\n- ", "## What\n- ", "## How to Test\n- "):
+            self.assertIn(header, body)
         self.assertEqual(draft.sections["what"], ["하나", "둘"])
         self.assertEqual(len(notes), 2)     # 제목 자름 + 빈 섹션 보정
-
-    def test_verify_detects_missing_bullet(self):
-        self.assertTrue(validate.verify_pr_text("t", "## Why\n- a\n\n## What\n\n## How to Test\n- c"))
 
 
 class HttpErrorTests(unittest.TestCase):

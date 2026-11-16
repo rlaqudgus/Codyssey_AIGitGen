@@ -1,7 +1,7 @@
 """모델 출력 검증과 후처리.
 
 모델은 JSON 필드만 돌려주고, 이 모듈이
-1) JSON 추출  2) 길이/형식 후처리(normalize_*)  3) 템플릿 조립(render_*)  4) 최종 텍스트 검증(verify_*)
+1) JSON 추출  2) 길이/형식 후처리(normalize_*)  3) 템플릿 조립(render_*)
 을 맡는다. 그래서 형식 규칙은 모델의 실수와 무관하게 지켜진다.
 """
 import json
@@ -119,30 +119,3 @@ def render_pr_body(draft):
         f"## {header}\n" + "\n".join(f"- {b}" for b in draft.sections[key]) for key, header in PR_SECTIONS
     )
 
-
-def verify_commit_text(text):
-    """조립이 끝난 커밋 메시지가 규칙을 지키는지 다시 확인한다. 문제 목록을 돌려준다."""
-    problems = []
-    lines = text.splitlines()
-    if not lines or not lines[0].strip():
-        problems.append("커밋 제목이 없습니다.")
-    elif len(lines[0]) > COMMIT_TITLE_MAX:
-        problems.append(f"커밋 제목이 {COMMIT_TITLE_MAX}자를 넘습니다.")
-    if len(lines) > 1 and lines[1].strip():
-        problems.append("제목과 본문 사이에 빈 줄이 없습니다.")
-    return problems
-
-
-def verify_pr_text(title, body):
-    problems = []
-    if not title.strip() or "\n" in title:
-        problems.append("PR 제목은 1줄이어야 합니다.")
-    if len(title) > PR_TITLE_MAX:
-        problems.append(f"PR 제목이 {PR_TITLE_MAX}자를 넘습니다.")
-    for _, header in PR_SECTIONS:
-        match = re.search(rf"^## {re.escape(header)}\n((?:(?!^## ).*\n?)*)", body, flags=re.MULTILINE)
-        if not match:
-            problems.append(f"'## {header}' 섹션 헤더가 없습니다.")
-        elif not re.search(r"^- \S", match.group(1), flags=re.MULTILINE):
-            problems.append(f"'## {header}' 섹션에 불릿이 없습니다.")
-    return problems

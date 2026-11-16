@@ -87,7 +87,6 @@ python main.py pr --reason "키가 틀렸을 때 안내가 헷갈린다는 의�
 [INFO] Git status 수집 완료: 2개 파일 변경 감지
 [INFO] Git diff 수집 완료: 45줄 — 스테이징된 변경 (git diff --staged)
 [INFO] AI API 요청 중... (gemini / gemini-3.6-flash)
-[INFO] 형식 검증 통과 (제목 길이 / 템플릿 구조)
 [DONE] 커밋 메시지 생성 완료
 
 --- Summary ---

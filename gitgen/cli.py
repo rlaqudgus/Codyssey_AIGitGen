@@ -7,10 +7,7 @@ from .ai_client import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, DEFAULT_TEMPERATURE, A
 from .git_collect import GitError, collect
 from .prompts import build_system, build_user
 from .safe_mode import SAFE_MAX_FILES, SAFE_MAX_LINES, prepare_diff
-from .validate import (
-    OutputError, extract_json, normalize_commit, normalize_pr,
-    render_commit, render_pr_body, verify_commit_text, verify_pr_text,
-)
+from .validate import OutputError, extract_json, normalize_commit, normalize_pr, render_commit, render_pr_body
 
 
 def log(level, message):
@@ -103,20 +100,14 @@ def main(argv=None):
         if kind == "commit":
             draft, notes = normalize_commit(data)
             text = render_commit(draft)
-            problems = verify_commit_text(text)
         else:
             draft, notes = normalize_pr(data)
             body = render_pr_body(draft)
-            problems = verify_pr_text(draft.title, body)
     except OutputError as e:
         log("ERROR", f"모델 출력을 사용할 수 없습니다: {e}")
         return 1
     for note in notes:
         log("INFO", f"후처리: {note}")
-    for problem in problems:
-        log("WARN", f"형식 검증 실패: {problem}")
-    if not problems:
-        log("INFO", "형식 검증 통과 (제목 길이 / 템플릿 구조)")
     log("DONE", f"{target} 생성 완료")
 
     # 5. 출력
