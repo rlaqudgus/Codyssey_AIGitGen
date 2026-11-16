@@ -11,11 +11,11 @@
 요구 사항: Python 3.10 이상, Git.
 
 ```bash
-git clone https://github.com/<your-id>/ai-gitgen.git
+git clone https://github.com/rlaqudgus/Codyssey_AIGitGen.git
 ```
 
 ```bash
-cd ai-gitgen
+cd Codyssey_AIGitGen
 ```
 
 설치할 패키지는 없습니다. 다른 프로젝트에서 쓰려면 그 프로젝트의 **루트 디렉토리**에서 이 저장소의 `main.py`를 경로로 실행합니다.
