@@ -1,0 +1,31 @@
+{
+  "language": "en",
+  "base_branch": "main",
+  "convention": {
+    "name": "net-solver",
+    "commit_format": "<Imperative verb> <what changed> (no type prefix)",
+    "commit_types": [],
+    "commit_rules": [
+      "Start with a capitalized imperative verb: Add, Fix, Update, Record, Restructure, Stream, Remove.",
+      "Do not use a type prefix such as feat: or fix:, and do not use a scope in parentheses.",
+      "Name the concrete thing that changed (file, feature, or document) instead of a vague word like 'stuff' or 'things'.",
+      "When the reason is not obvious, add it after 'so' or a semicolon in the same line."
+    ],
+    "commit_examples": [
+      "Restructure README around evaluation items 1-5; add study concept book",
+      "Stream a keep-alive space every 10s during analysis so idle-timeout middleboxes don't reset it",
+      "Add final functional-requirements evidence captured before cleanup"
+    ],
+    "pr_title_format": "<Imperative verb> <what changed> (same style as commit titles)",
+    "pr_rules": [
+      "Write in a plain, factual tone. No marketing words.",
+      "In How to Test, prefer commands that run locally without an API key (for example: npm run dev, then the example problem)."
+    ],
+    "pr_checklist": [
+      "Ran locally with `node server/server.js --static`",
+      "Example problem (04) still answers ③",
+      "nginx.conf and server.js limits are still in sync",
+      "No secrets or .env values in the diff"
+    ]
+  }
+}
