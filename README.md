@@ -113,62 +113,70 @@ python main.py commit --dry-run --safe-mode --max-lines 80
 
 ## 4. 출력 예시
 
-아래 생성 문구는 **형식을 보여 주는 예시**입니다. 실제 문구는 변경 내용과 모델에 따라 달라집니다.
+아래는 이 저장소의 `fix/gemini-auth-error-hint` 브랜치에서 **실제로 실행한 결과**입니다 (Gemini `gemini-3.6-flash`, 기본 옵션). 문구는 변경 내용과 모델에 따라 달라집니다.
 
 ### 커밋 메시지
 
 ```text
-[INFO] 현재 브랜치: main
-[INFO] Git status 수집 완료: 3개 파일 변경 감지
-[INFO] Git diff 수집 완료: 128줄 — 스테이징된 변경 (git diff --staged)
+[INFO] 현재 브랜치: fix/gemini-auth-error-hint
+[INFO] Git status 수집 완료: 2개 파일 변경 감지
+[INFO] Git diff 수집 완료: 45줄 — 스테이징된 변경 (git diff --staged)
 [INFO] AI API 요청 중... (gemini / gemini-3.6-flash)
 [INFO] 형식 검증 통과 (제목 길이 / 템플릿 구조)
 [DONE] 커밋 메시지 생성 완료
 
 --- Summary ---
-safe-mode 옵션을 추가해 diff의 민감정보를 가린 뒤 AI에 전송하도록 했습니다.
+Gemini API 사용 시 API 키 오류로 발생하는 HTTP 400 응답을 인증 실패 메시지로 처리하도록 변경하고 관련 테스트를 추가했습니다.
 ---------------
 
 --- Commit Message ---
-feat: safe-mode 마스킹 및 diff 전송 제한 추가
+fix: Gemini API 키 오류 시 HTTP 400 힌트를 인증 실패로 변경
 
-- gitgen/safe_mode.py에 API Key·이메일 등 정규표현식 마스킹 규칙 추가
-- gitgen/cli.py에 --safe-mode, --max-files, --max-lines 옵션 연결
+- Gemini API가 잘못된 API 키에 대해 401 대신 400을 반환할 때 인증 실패 안내가 출력되도록 gitgen/ai_client.py를 수정했습니다.
+- Gemini API 키 오류 처리 및 기타 400 에러 메시지를 검증하는 HttpErrorTests 케이스를 tests/test_gitgen.py에 추가했습니다.
 ----------------------
 
-[INFO] AI API 호출 횟수: 1회 (입력 1843 / 출력 212 토큰)
+[INFO] AI API 호출 횟수: 1회 (입력 1235 / 출력 162 토큰)
 [INFO] 위 문구는 초안입니다. 내용을 검토·수정한 뒤 직접 적용하세요.
 ```
+
+이 메시지는 수정 없이 실제 커밋(`7eaee5d`)에 사용했습니다.
 
 ### PR 제목/본문
 
 ```text
-[INFO] 현재 브랜치: feature/safe-mode
-[INFO] Git status 수집 완료: 4개 파일 변경 감지
-[INFO] Git diff 수집 완료: 240줄 — 브랜치 변경 (git diff main...HEAD)
+[INFO] 현재 브랜치: fix/gemini-auth-error-hint
+[INFO] Git status 수집 완료: 2개 파일 변경 감지
+[INFO] Git diff 수집 완료: 45줄 — 작업 폴더 변경 (git diff)
 [INFO] AI API 요청 중... (gemini / gemini-3.6-flash)
 [INFO] 형식 검증 통과 (제목 길이 / 템플릿 구조)
 [DONE] PR 초안 생성 완료
 
+--- Summary ---
+Gemini API에서 API 키가 유효하지 않을 때 HTTP 401이 아닌 400 오류가 반환되는 경우를 처리하여, 사용자에게 인증 실패 힌트를 정확히 안내하도록 수정하고 단위 테스트를 추가했습니다.
+---------------
+
 --- PR Title ---
-feat: safe-mode로 민감정보 마스킹 후 diff 전송
+fix: Gemini API 키 오류 발생 시 인증 실패 힌트 출력하도록 수정
 ----------------
 
 --- PR Body ---
 ## Why
-- git diff에 API Key나 이메일이 섞여 있으면 그대로 외부 AI API로 전송되는 문제가 있었습니다.
+- Gemini API는 유효하지 않은 API 키 전달 시 401 대신 400 HTTP 응답 코드를 반환하여, 사용자에게 잘못된 오류 힌트(요청 실패/요청 형식 오류)가 제공되는 문제가 있습니다.
 
 ## What
-- gitgen/safe_mode.py: 마스킹 규칙, 민감 파일 제외, 파일/줄 수 제한 구현
-- gitgen/cli.py: --safe-mode, --max-files, --max-lines, --mask-pattern 옵션 추가
+- gitgen/ai_client.py: HTTP 400 응답 메시지 내에 'api key' 문구가 포함된 경우 HTTP 401의 인증 실패 힌트로 변경하도록 예외 처리 추가
+- tests/test_gitgen.py: HttpErrorTests 클래스를 신설하고 Gemini API 키 인증 실패 및 일반 400 에러 처리 동작을 검증하는 단위 테스트 추가
 
 ## How to Test
-- python -m unittest discover -s tests
-- python main.py commit --dry-run --safe-mode 로 전송될 프롬프트에 키가 없는지 확인
+- python -m unittest tests/test_gitgen.py 실행하여 새로 추가된 HttpErrorTests 단위 테스트 통과 여부 확인
 ---------------
 
-[INFO] AI API 호출 횟수: 1회 (입력 3120 / 출력 380 토큰)
+[INFO] AI API 호출 횟수: 1회 (입력 1307 / 출력 296 토큰)
+[INFO] 위 문구는 초안입니다. 내용을 검토·수정한 뒤 직접 적용하세요.
 ```
+
+검토하며 고친 부분: Why의 "요청 실패/요청 형식 오류"는 실제로는 "요청 형식 오류" 하나였으므로, PR에 쓸 때 그렇게 바로잡았습니다. 초안은 이렇게 사실 관계를 확인한 뒤 적용합니다.
 
 ### 오류 상황 (실제 실행 결과)
 
@@ -184,7 +192,7 @@ API Key 미설정:
 
 ```text
 [ERROR] AI API 호출 실패: HTTP 401 인증 실패 (API Key가 올바른지 확인하세요) — invalid x-api-key
-[ERROR] AI API 호출 실패: HTTP 400 요청 형식 오류 (모델 이름이나 파라미터 값을 확인하세요) — API key not valid. Please pass a valid API key.
+[ERROR] AI API 호출 실패: HTTP 400 인증 실패 (API Key가 올바른지 확인하세요) — API key not valid. Please pass a valid API key.
 ```
 
 변경 사항 없음:
@@ -305,7 +313,7 @@ python /path/to/ai-gitgen/main.py commit --convention /path/to/ai-gitgen/convent
 
 ## 8. 테스트
 
-AI API를 호출하지 않는 테스트 26개가 있습니다 (임시 Git 저장소를 만들어 CLI 전체 흐름까지 확인).
+AI API를 호출하지 않는 테스트 28개가 있습니다 (임시 Git 저장소를 만들어 CLI 전체 흐름까지 확인).
 
 ```bash
 python -m unittest discover -s tests -v
